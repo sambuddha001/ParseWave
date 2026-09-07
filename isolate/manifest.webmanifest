@@ -1,0 +1,17 @@
+{
+  "name": "ParseWave",
+  "short_name": "ParseWave",
+  "description": "Turn any document into an audiobook instantly — narration runs entirely in your browser.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF7F2",
+  "theme_color": "#AD4E27",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
