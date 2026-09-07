@@ -44,6 +44,11 @@ export function NarrationDeck({
 }) {
   const segments = useMemo(() => segmentForSpeech(book.text), [book.text]);
 
+  // Preview frames frequently block the browser's speech engine; when we're
+  // embedded, offer a one-click way out to a real browser tab.
+  const inPreviewFrame =
+    typeof window !== "undefined" && window.self !== window.top;
+
   // Resume where the listener left off.
   const [initialIndex] = useState(() => {
     const raw = localStorage.getItem(`aw:pos:${book.id}`);
@@ -150,14 +155,26 @@ export function NarrationDeck({
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <p className="leading-5">{narrator.error}</p>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => narrator.play()}
-              >
-                Try again
-              </Button>
+              <div className="flex shrink-0 flex-col items-stretch gap-1.5">
+                {inPreviewFrame && (
+                  <a
+                    href={window.location.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-md border border-destructive/30 px-2.5 py-1.5 text-center text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10"
+                  >
+                    Open in new tab
+                  </a>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => narrator.play()}
+                >
+                  Try again
+                </Button>
+              </div>
             </div>
           )}
 

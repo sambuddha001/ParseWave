@@ -77,6 +77,8 @@ export interface NarratorApi {
  *   unconditional cancel.
  * - A watchdog recovers when the engine accepts an utterance but never plays
  *   it, and a heartbeat nudges Chrome's long-utterance freeze.
+ * - A synthesis failure (broken/missing voice, blocked engine) triggers one
+ *   automatic retry with a different voice before showing an error.
  */
 export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
   const supported =
@@ -100,6 +102,7 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
   const voiceRef = useRef(voiceURI);
   const generationRef = useRef(0);
   const recoveryRef = useRef(0);
+  const fallbackRef = useRef(false);
 
   useEffect(() => {
     segmentsRef.current = segments;
@@ -191,7 +194,10 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
   ) {
     if (!supported) return;
     const synth = window.speechSynthesis;
-    if (!opts.fromWatchdog) recoveryRef.current = 0;
+    if (!opts.fromWatchdog) {
+      recoveryRef.current = 0;
+      fallbackRef.current = false;
+    }
     const generation = ++generationRef.current;
 
     const segment = segmentsRef.current[from];
@@ -217,6 +223,7 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     utterance.onstart = () => {
       if (generation !== generationRef.current) return;
       recoveryRef.current = 0;
+      fallbackRef.current = false;
       setError(null);
     };
     utterance.onend = () => {
@@ -231,13 +238,41 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     };
     utterance.onerror = (event) => {
       // Replacing the queue reports the old utterance as interrupted — expected.
-      if (event.error === "interrupted" || event.error === "canceled") return;
+      // (String cast: Chrome emits codes like "synthesis-failed" that the DOM
+      // lib's SpeechSynthesisErrorCode union doesn't include.)
+      const code = String(event.error);
+      if (code === "interrupted" || code === "canceled") return;
       if (generation !== generationRef.current) return;
+
+      // The chosen voice or engine render failed. Retry once with a different
+      // voice (or the engine default) before giving up — this rescues broken
+      // voice picks on Windows/Linux and some sandboxed engines.
+      const retriable =
+        code === "synthesis-failed" ||
+        code === "audio-capture" ||
+        code === "voice-unavailable" ||
+        code === "language-unavailable" ||
+        code === "network";
+      if (retriable && !fallbackRef.current) {
+        fallbackRef.current = true;
+        const failedURI = voiceRef.current;
+        const list = synth.getVoices();
+        const alternative =
+          pickDefaultVoice(list.filter((v) => v.voiceURI !== failedURI))
+            ?.voiceURI ?? "";
+        voiceRef.current = alternative;
+        setVoiceURI(alternative);
+        speakFrom(from, { fromWatchdog: true });
+        return;
+      }
+
       setEngineState("idle");
       setError(
-        event.error === "not-allowed"
+        code === "not-allowed"
           ? "The browser blocked speech audio. Press play once more, or open the app in its own browser tab."
-          : `Speech engine error: ${event.error}`,
+          : code === "synthesis-failed" || code === "synthesis-unavailable"
+            ? "Your browser's speech engine couldn't produce audio. Preview frames often block it — open this app in its own browser tab (Chrome, Edge, or Safari) and press play."
+            : `Speech engine error: ${code}`,
       );
     };
 
