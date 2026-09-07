@@ -144,6 +144,23 @@ export function NarrationDeck({
         </div>
       ) : (
         <>
+          {narrator.error && (
+            <div className="mt-5 flex items-start justify-between gap-3 rounded-xl bg-destructive/10 p-4 text-sm text-destructive">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <p className="leading-5">{narrator.error}</p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => narrator.play()}
+              >
+                Try again
+              </Button>
+            </div>
+          )}
+
           {/* Waveform */}
           <div className="mt-6 flex h-16 items-center justify-center gap-[3px]" aria-hidden="true">
             {bars.map((i) => (
