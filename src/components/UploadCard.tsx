@@ -1,15 +1,14 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api } from "@/convex/_generated/api";
+import { saveBook, type StoredBook } from "@/lib/bookStore";
 import {
   ACCEPTED_FILES,
-  MAX_CHARS,
   bookStats,
   extractTextFromFile,
   guessTitle,
 } from "@/lib/extract";
+import { segmentForSpeech } from "@/lib/segment";
 import { cn } from "@/lib/utils";
-import { useAction, useMutation } from "convex/react";
 import {
   BookAudio,
   Check,
@@ -21,28 +20,35 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { useNavigate } from "react-router";
 
-type Phase = "idle" | "extracting" | "ready" | "creating";
+type Phase = "idle" | "extracting" | "ready";
 
-export function UploadCard() {
-  const navigate = useNavigate();
+function makeId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function nowMs(): number {
+  return Date.now();
+}
+
+export function UploadCard({ onSaved }: { onSaved: (book: StoredBook) => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const createBook = useMutation(api.books.createBook);
-  const narrate = useAction(api.tts.generateAudiobook);
-
   const [phase, setPhase] = useState<Phase>("idle");
   const [dragging, setDragging] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [title, setTitle] = useState("");
 
   const stats = text ? bookStats(text) : null;
-  const estParts = stats ? Math.max(1, Math.round(stats.chars / 1500)) : 0;
-  const busy = phase === "extracting" || phase === "creating";
+  const parts = text ? segmentForSpeech(text).length : 0;
+  const busy = phase === "extracting" || saving;
 
   function reset() {
     setPhase("idle");
+    setSaving(false);
     setFile(null);
     setText("");
     setTitle("");
@@ -57,11 +63,6 @@ export function UploadCard() {
           "We couldn't find readable text in this file. Scanned documents (images of text) aren't supported yet.",
         );
       }
-      if (extracted.length > MAX_CHARS) {
-        throw new Error(
-          `This document is too long (${extracted.length.toLocaleString()} characters). The current limit is ${MAX_CHARS.toLocaleString()}.`,
-        );
-      }
       setFile(next);
       setText(extracted);
       setTitle(guessTitle(next.name, extracted));
@@ -74,31 +75,37 @@ export function UploadCard() {
     }
   }
 
-  async function handleNarrate() {
-    if (!file || !text) return;
-    setPhase("creating");
+  async function handleSave() {
+    if (!file || !text || saving) return;
+    setSaving(true);
     try {
-      const bookId = await createBook({
-        title: title.trim() || "Untitled audiobook",
+      const book: StoredBook = {
+        id: makeId(),
+        title: title.trim() || guessTitle(file.name, text),
         fileName: file.name,
         text,
-      });
-      // Fire-and-forget: progress streams in reactively via the book status.
-      void narrate({ bookId }).catch((err: Error) => toast.error(err.message));
-      toast.success("Narration started — your audiobook is being voiced.");
-      navigate(`/listen/${bookId}`);
+        words: stats?.words ?? 0,
+        minutes: stats?.minutes ?? 1,
+        createdAt: nowMs(),
+      };
+      await saveBook(book);
+      toast.success("Added to your shelf — press play below.");
+      onSaved(book);
+      reset();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Could not start narration.",
+        err instanceof Error
+          ? err.message
+          : "Could not save this audiobook locally.",
       );
-      setPhase("ready");
+      setSaving(false);
     }
   }
 
   return (
     <section
-      className="rounded-3xl border border-border/70 bg-card p-1 shadow-soft"
-      aria-label="Upload a document"
+      className="rounded-3xl border border-border/70 bg-card p-1 text-left shadow-soft"
+      aria-label="Add a document to narrate"
     >
       <input
         ref={inputRef}
@@ -147,8 +154,8 @@ export function UploadCard() {
               <p className="text-sm font-medium">
                 Reading your document&hellip;
               </p>
-              <p className="text-xs text-muted-foreground">
-                Extracting text and skipping images, page numbers, and headers
+              <p className="max-w-xs text-xs text-muted-foreground">
+                Extracting every page — big documents can take a moment
               </p>
             </>
           ) : (
@@ -161,7 +168,7 @@ export function UploadCard() {
                   Drop your PDF or text file here
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  or click to browse &middot; up to 25 MB
+                  or click to browse &middot; any length, no sign-up
                 </p>
               </div>
               <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-[11px] font-medium text-secondary-foreground">
@@ -181,7 +188,7 @@ export function UploadCard() {
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold">{file?.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  Ready to be narrated
+                  Ready to be read aloud
                 </p>
               </div>
             </div>
@@ -190,7 +197,6 @@ export function UploadCard() {
               size="icon"
               className="size-8 shrink-0 text-muted-foreground"
               onClick={reset}
-              disabled={busy}
               aria-label="Choose a different file"
             >
               <X className="size-4" />
@@ -204,7 +210,7 @@ export function UploadCard() {
                 label: "Listen time",
                 value: stats ? `~${stats.minutes} min` : "—",
               },
-              { label: "Parts", value: `≈${estParts}` },
+              { label: "Parts", value: parts ? `≈${parts}` : "—" },
             ].map((stat) => (
               <div
                 key={stat.label}
@@ -231,7 +237,7 @@ export function UploadCard() {
               id="book-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              disabled={busy}
+              disabled={saving}
               className="mt-1.5 bg-background"
               maxLength={120}
             />
@@ -246,18 +252,16 @@ export function UploadCard() {
 
           <div className="mt-4 flex flex-col gap-2 sm:flex-row">
             <Button
-              onClick={handleNarrate}
+              onClick={() => void handleSave()}
               disabled={busy || !text}
               className="flex-1 gap-2"
             >
-              {phase === "creating" ? (
+              {saving ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <BookAudio className="size-4" />
               )}
-              {phase === "creating"
-                ? "Starting narration…"
-                : "Narrate this audiobook"}
+              {saving ? "Adding…" : "Add to my shelf"}
             </Button>
             <Button
               variant="outline"

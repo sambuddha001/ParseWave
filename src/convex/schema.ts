@@ -33,44 +33,6 @@ const schema = defineSchema(
     }).index("email", ["email"]), // index for the email. do not remove or modify
 
     // add other tables here
-
-    // Audiobooks: one uploaded document turned into a narrated audiobook.
-    books: defineTable({
-      userId: v.id("users"),
-      title: v.string(),
-      fileName: v.string(),
-      charCount: v.number(),
-      wordCount: v.number(),
-      // estimated listening minutes at ~150 wpm
-      estMinutes: v.number(),
-      voiceName: v.string(),
-      status: v.union(
-        v.literal("generating"),
-        v.literal("ready"),
-        v.literal("error"),
-      ),
-      totalSegments: v.number(),
-      readySegments: v.number(),
-      error: v.optional(v.string()),
-      createdAt: v.number(),
-    }).index("by_user", ["userId"]),
-
-    // Segments: text chunks of a book, each rendered to one MP3 in storage.
-    segments: defineTable({
-      bookId: v.id("books"),
-      idx: v.number(),
-      text: v.string(),
-      charCount: v.number(),
-      status: v.union(
-        v.literal("pending"),
-        v.literal("processing"),
-        v.literal("ready"),
-        v.literal("error"),
-      ),
-      storageId: v.optional(v.id("_storage")),
-      bytes: v.optional(v.number()),
-      error: v.optional(v.string()),
-    }).index("by_book", ["bookId", "idx"]),
   },
   {
     schemaValidation: false,

@@ -1,7 +1,7 @@
 {
   "name": "Audiobook Weaver",
   "short_name": "Audiobook Weaver",
-  "description": "Turn any PDF or text file into an audiobook narrated with a warm, expressive human voice.",
+  "description": "Turn any document into an audiobook instantly — narration runs entirely in your browser.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#FAF7F2",
