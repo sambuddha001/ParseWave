@@ -1,11 +1,12 @@
 /**
- * Split cleaned text into sentence-aligned segments for the browser's
- * speech engine. Segments stay small so narration is smooth and captions
- * highlight in sync — this also sidesteps utterance length bugs in some
- * browsers. There is no limit on total text length.
+ * Split cleaned text into sentence-aligned parts for the browser's speech
+ * engine. Parts are large (~2 minutes of reading) so narration flows
+ * continuously like a real audiobook instead of restarting prosody every
+ * few sentences, while staying well under every engine's utterance limits.
+ * There is no limit on total text length.
  */
 
-const MAX_SEGMENT = 900;
+const MAX_SEGMENT = 2200;
 
 /** Split a long paragraph into sentence-sized pieces under `max` chars. */
 function splitLongParagraph(paragraph: string, max: number): string[] {
@@ -44,6 +45,27 @@ function splitLongParagraph(paragraph: string, max: number): string[] {
   }
   if (current.trim()) pieces.push(current.trim());
   return pieces;
+}
+
+export interface SentenceSpan {
+  text: string;
+  start: number;
+  end: number;
+}
+
+const SENTENCE_RE = /[^.!?…]+[.!?…]+["'”’)\]]*|\S[^.!?…]*$/g;
+
+/** Split text into sentence spans with their character offsets. */
+export function splitSentences(text: string): SentenceSpan[] {
+  const spans: SentenceSpan[] = [];
+  for (const match of text.matchAll(SENTENCE_RE)) {
+    const raw = match[0];
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const start = match.index + (raw.length - raw.trimStart().length);
+    spans.push({ text: trimmed, start, end: match.index + raw.length });
+  }
+  return spans;
 }
 
 /** Divide a whole book into narration segments, in reading order. */

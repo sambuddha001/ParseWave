@@ -6,10 +6,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { pickDefaultVoice, useNarrator } from "@/hooks/use-speech";
+import {
+  CHARS_PER_SECOND,
+  pickDefaultVoice,
+  useNarrator,
+} from "@/hooks/use-speech";
 import type { StoredBook } from "@/lib/bookStore";
 import { waveHeight } from "@/lib/extract";
-import { segmentForSpeech } from "@/lib/segment";
+import { segmentForSpeech, splitSentences } from "@/lib/segment";
 import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -24,15 +28,15 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 const RATE_OPTIONS = [0.75, 1, 1.25, 1.5, 2];
-const WPM = 150;
 
 function fmtMinutes(minutes: number): string {
+  if (minutes < 1) return "<1 min";
   if (minutes >= 60) {
     const h = Math.floor(minutes / 60);
     const m = minutes % 60;
     return m ? `${h}h ${m}m` : `${h}h`;
   }
-  return `${Math.max(1, minutes)} min`;
+  return `${Math.round(minutes)} min`;
 }
 
 export function NarrationDeck({
@@ -62,25 +66,40 @@ export function NarrationDeck({
   const bars = useMemo(() => Array.from({ length: 48 }, (_, i) => i), []);
   const playing = narrator.state === "playing";
 
-  const wordCounts = useMemo(
-    () => segments.map((segment) => (segment.match(/\S+/g) ?? []).length),
-    [segments],
-  );
-  const wordsBefore = useMemo(() => {
-    const prefix = [0];
-    for (let i = 0; i < wordCounts.length; i++) {
-      prefix.push(prefix[i] + wordCounts[i]);
-    }
-    return prefix;
-  }, [wordCounts]);
-
   const total = segments.length;
   const currentIndex = Math.min(narrator.index, Math.max(0, total - 1));
-  const elapsed = (wordsBefore[currentIndex] ?? 0) / (WPM * narrator.rate);
-  const left =
-    ((wordsBefore[total] ?? 0) - (wordsBefore[currentIndex] ?? 0)) /
-    (WPM * narrator.rate);
-  const progress = total ? ((currentIndex + 1) / total) * 100 : 0;
+  const currentPart = segments[currentIndex] ?? "";
+
+  // Sentence-level captions, synced to the engine's word boundaries.
+  const sentences = useMemo(() => splitSentences(currentPart), [currentPart]);
+  const activeSentenceIdx = useMemo(() => {
+    let active = 0;
+    for (let i = 0; i < sentences.length; i++) {
+      if (narrator.charIndex >= sentences[i].start) active = i;
+      else break;
+    }
+    return active;
+  }, [sentences, narrator.charIndex]);
+  const activeSentence = sentences[activeSentenceIdx]?.text ?? currentPart;
+  const upcoming =
+    sentences[activeSentenceIdx + 1]?.text ?? segments[currentIndex + 1];
+
+  // Character-based position for a smooth, continuous progress bar.
+  const charPrefix = useMemo(() => {
+    const prefix = [0];
+    for (const segment of segments) {
+      prefix.push(prefix[prefix.length - 1] + segment.length);
+    }
+    return prefix;
+  }, [segments]);
+  const totalChars = charPrefix[total] ?? 0;
+  const charsDone =
+    (charPrefix[currentIndex] ?? 0) +
+    Math.min(narrator.charIndex, currentPart.length);
+  const elapsedMin = charsDone / (CHARS_PER_SECOND * narrator.rate) / 60;
+  const leftMin =
+    (totalChars - charsDone) / (CHARS_PER_SECOND * narrator.rate) / 60;
+  const progress = totalChars ? (charsDone / totalChars) * 100 : 0;
 
   // Remember the position after every part.
   useEffect(() => {
@@ -102,10 +121,21 @@ export function NarrationDeck({
   );
 
   function handleSeek(event: React.MouseEvent<HTMLDivElement>) {
-    if (!total) return;
+    if (!totalChars) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    narrator.goTo(Math.floor(ratio * total));
+    const ratio = Math.min(
+      1,
+      Math.max(0, (event.clientX - rect.left) / rect.width),
+    );
+    const targetChar = ratio * totalChars;
+    let target = 0;
+    while (
+      target < total - 1 &&
+      (charPrefix[target + 1] ?? 0) <= targetChar
+    ) {
+      target++;
+    }
+    narrator.goTo(target);
   }
 
   return (
@@ -179,7 +209,10 @@ export function NarrationDeck({
           )}
 
           {/* Waveform */}
-          <div className="mt-6 flex h-16 items-center justify-center gap-[3px]" aria-hidden="true">
+          <div
+            className="mt-6 flex h-16 items-center justify-center gap-[3px]"
+            aria-hidden="true"
+          >
             {bars.map((i) => (
               <span
                 key={i}
@@ -201,9 +234,9 @@ export function NarrationDeck({
             <div
               role="slider"
               aria-label="Narration position"
-              aria-valuemin={1}
-              aria-valuemax={total}
-              aria-valuenow={currentIndex + 1}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress)}
               tabIndex={0}
               onClick={handleSeek}
               onKeyDown={(e) => {
@@ -213,16 +246,16 @@ export function NarrationDeck({
               className="group relative h-2 w-full cursor-pointer overflow-hidden rounded-full bg-muted"
             >
               <div
-                className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
+                className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
                 style={{ width: `${progress}%` }}
               />
             </div>
             <div className="mt-1.5 flex justify-between text-[11px] font-medium text-muted-foreground">
-              <span>{fmtMinutes(Math.max(0, Math.round(elapsed)))} in</span>
+              <span>{fmtMinutes(Math.max(0, elapsedMin))} in</span>
               <span className="tabular-nums">
-                Part {currentIndex + 1} of {total}
+                Section {currentIndex + 1} of {total}
               </span>
-              <span>{fmtMinutes(Math.max(0, Math.round(left)))} left</span>
+              <span>{fmtMinutes(Math.max(0, leftMin))} left</span>
             </div>
           </div>
 
@@ -234,7 +267,7 @@ export function NarrationDeck({
               className="size-10 rounded-full text-muted-foreground hover:text-foreground"
               onClick={narrator.prev}
               disabled={currentIndex === 0}
-              aria-label="Previous part"
+              aria-label="Previous section"
             >
               <SkipBack className="size-4" />
             </Button>
@@ -257,32 +290,32 @@ export function NarrationDeck({
               className="size-10 rounded-full text-muted-foreground hover:text-foreground"
               onClick={narrator.next}
               disabled={currentIndex >= total - 1}
-              aria-label="Next part"
+              aria-label="Next section"
             >
               <SkipForward className="size-4" />
             </Button>
           </div>
 
-          {/* Captions */}
+          {/* Captions — the sentence being read, plus what's next */}
           <div
             className="mt-6 min-h-28 rounded-2xl border border-border/60 bg-background/60 p-4"
             aria-live="polite"
           >
             <AnimatePresence mode="wait" initial={false}>
               <motion.p
-                key={currentIndex}
+                key={`${currentIndex}:${activeSentenceIdx}`}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
                 transition={{ duration: 0.18 }}
-                className="font-display text-base leading-relaxed sm:text-lg"
+                className="line-clamp-5 font-display text-base leading-relaxed sm:text-lg"
               >
-                {segments[currentIndex]}
+                {activeSentence}
               </motion.p>
             </AnimatePresence>
-            {segments[currentIndex + 1] && (
+            {upcoming && (
               <p className="mt-3 line-clamp-2 border-t border-border/50 pt-3 text-sm leading-6 text-muted-foreground/70">
-                {segments[currentIndex + 1]}
+                {upcoming}
               </p>
             )}
           </div>
@@ -295,9 +328,14 @@ export function NarrationDeck({
                 onValueChange={narrator.setVoice}
                 disabled={sortedVoices.length === 0}
               >
-                <SelectTrigger className="w-full bg-background" aria-label="Narrator voice">
+                <SelectTrigger
+                  className="w-full bg-background"
+                  aria-label="Narrator voice"
+                >
                   <SelectValue
-                    placeholder={defaultVoice ? defaultVoice.name : "Default voice"}
+                    placeholder={
+                      defaultVoice ? defaultVoice.name : "Default voice"
+                    }
                   />
                 </SelectTrigger>
                 <SelectContent>
@@ -309,7 +347,11 @@ export function NarrationDeck({
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Narration speed">
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              role="group"
+              aria-label="Narration speed"
+            >
               {RATE_OPTIONS.map((option) => (
                 <button
                   key={option}

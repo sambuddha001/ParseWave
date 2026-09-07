@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 
 export type NarrationState = "idle" | "playing" | "paused";
 
+/** Rough speaking pace for time estimates (~150 wpm ≈ 15 chars/s). */
+export const CHARS_PER_SECOND = 15;
+
 const RATE_KEY = "aw:rate";
 const VOICE_KEY = "aw:voice";
 
@@ -13,7 +16,11 @@ function loadRate(): number {
   return Number.isFinite(parsed) ? clampRate(parsed) : 1;
 }
 
-/** Heuristically pick the warmest, most expressive English voice available. */
+/**
+ * Heuristically pick the warmest, highest-quality English voice available.
+ * Network/neural voices rank first; known-robotic engines rank last so we
+ * never default to them.
+ */
 export function pickDefaultVoice(
   voices: SpeechSynthesisVoice[],
 ): SpeechSynthesisVoice | undefined {
@@ -36,19 +43,36 @@ export function pickDefaultVoice(
     const name = voice.name.toLowerCase();
     let points = 0;
     if (voice.lang?.toLowerCase().startsWith("en")) points += 4;
-    if (/natural|neural|premium|enhanced/.test(name)) points += 3;
-    if (name.includes("google")) points += 2;
+    if (/natural|neural|premium|enhanced|wavenet|studio|journey/.test(name))
+      points += 6;
+    if (name.includes("google")) points += 5; // Chrome's network voices sound best
+    if (name.includes("microsoft") && name.includes("online")) points += 4;
     if (warmNames.some((warm) => name.includes(warm))) points += 2;
     if (voice.localService) points += 1;
+    if (/espeak|pico|festival|eloquence|freetts/.test(name)) points -= 10;
+    else if (name.includes("compact")) points -= 3;
     return points;
   };
   return [...voices].sort((a, b) => score(b) - score(a))[0];
+}
+
+/** Snap an offset back to the start of the nearest word. */
+function alignToWordStart(text: string, offset: number): number {
+  if (offset <= 0 || offset >= text.length) return 0;
+  for (let i = Math.min(offset, text.length - 1); i > 0; i--) {
+    const prev = text[i - 1];
+    const cur = text[i];
+    if (/\s/.test(prev) && !/\s/.test(cur)) return i;
+  }
+  return 0;
 }
 
 export interface NarratorApi {
   supported: boolean;
   state: NarrationState;
   index: number;
+  /** Character offset of the spoken word inside the current part. */
+  charIndex: number;
   rate: number;
   voiceURI: string;
   voices: SpeechSynthesisVoice[];
@@ -67,18 +91,20 @@ export interface NarratorApi {
 
 /**
  * Drives the browser's built-in speech engine (Web Speech API) across a
- * list of narration segments — no server, no API keys, no usage limits.
+ * list of narration parts — no server, no API keys, no usage limits.
  *
  * Reliability rules baked in:
- * - The very first `speak()` happens synchronously inside the user gesture
- *   (Safari and iOS refuse speech that is deferred past the gesture).
- * - `cancel()` is only called when something is actually queued, because
- *   Chrome can silently swallow an utterance spoken in the same tick as an
- *   unconditional cancel.
- * - A watchdog recovers when the engine accepts an utterance but never plays
- *   it, and a heartbeat nudges Chrome's long-utterance freeze.
- * - A synthesis failure (broken/missing voice, blocked engine) triggers one
- *   automatic retry with a different voice before showing an error.
+ * - Parts are large and chained seamlessly, so the book reads as one
+ *   continuous narration instead of staccato chunks.
+ * - Pause is implemented with `cancel()` plus a word-boundary position:
+ *   `synth.pause()` is a silent no-op on several engines (notably Chrome
+ *   with remote voices), while cancel is honored everywhere.
+ * - The first `speak()` happens synchronously inside the user gesture
+ *   (Safari and iOS refuse speech deferred past the gesture).
+ * - A watchdog recovers when the engine stalls silently, resuming from the
+ *   last spoken word instead of restarting the part.
+ * - A synthesis failure retries the same voice once (transient hiccups are
+ *   common), then switches to a different voice before showing an error.
  */
 export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
   const supported =
@@ -86,6 +112,7 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
 
   const [state, setState] = useState<NarrationState>("idle");
   const [index, setIndex] = useState(initialIndex);
+  const [charIndex, setCharIndex] = useState(0);
   const [rate, setRate] = useState(loadRate);
   const [voiceURI, setVoiceURI] = useState(
     () => localStorage.getItem(VOICE_KEY) ?? "",
@@ -98,11 +125,14 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
   const segmentsRef = useRef(segments);
   const stateRef = useRef<NarrationState>("idle");
   const indexRef = useRef(initialIndex);
+  const charIndexRef = useRef(0);
   const rateRef = useRef(rate);
   const voiceRef = useRef(voiceURI);
   const generationRef = useRef(0);
   const recoveryRef = useRef(0);
-  const fallbackRef = useRef(false);
+  const fallbackRef = useRef(0);
+  const boundaryFiredRef = useRef(false);
+  const speakingSinceRef = useRef(0);
 
   useEffect(() => {
     segmentsRef.current = segments;
@@ -152,8 +182,8 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
   }, [supported]);
 
   // Heartbeat + silence watchdog. Chrome sometimes accepts an utterance but
-  // never plays it, or freezes mid-part on longer segments; both previously
-  // looked identical to a dead player. Recover instead of failing silently.
+  // never plays it, or freezes mid-part; both previously looked identical to
+  // a dead player. Recover from the last spoken word instead of restarting.
   useEffect(() => {
     if (!supported) return;
     const synth = window.speechSynthesis;
@@ -162,6 +192,23 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
       if (synth.speaking || synth.pending) {
         // A no-op resume() unfreezes Chrome's long-utterance stall.
         if (synth.speaking && !synth.paused) synth.resume();
+        // Engines without boundary events: estimate the reading position
+        // so captions and the progress bar still move.
+        if (!boundaryFiredRef.current && speakingSinceRef.current > 0) {
+          const part = segmentsRef.current[indexRef.current] ?? "";
+          const seconds = (Date.now() - speakingSinceRef.current) / 1000;
+          const estimated = Math.floor(
+            seconds * CHARS_PER_SECOND * rateRef.current,
+          );
+          const capped = Math.max(
+            charIndexRef.current,
+            Math.min(part.length - 1, estimated),
+          );
+          if (capped > charIndexRef.current) {
+            charIndexRef.current = capped;
+            setCharIndex(capped);
+          }
+        }
         return;
       }
       recoveryRef.current += 1;
@@ -172,7 +219,10 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
         );
         return;
       }
-      speakFrom(indexRef.current, { fromWatchdog: true });
+      speakFrom(indexRef.current, {
+        fromWatchdog: true,
+        startOffset: charIndexRef.current,
+      });
     }, 1200);
     return () => window.clearInterval(watchdog);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -187,16 +237,16 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     }
   }
 
-  /** Speak segment `from`, then chain onward. Re-invocations supersede safely. */
+  /** Speak part `from`, then chain onward. Re-invocations supersede safely. */
   function speakFrom(
     from: number,
-    opts: { fromWatchdog?: boolean } = {},
+    opts: { fromWatchdog?: boolean; startOffset?: number } = {},
   ) {
     if (!supported) return;
     const synth = window.speechSynthesis;
     if (!opts.fromWatchdog) {
       recoveryRef.current = 0;
-      fallbackRef.current = false;
+      fallbackRef.current = 0;
     }
     const generation = ++generationRef.current;
 
@@ -207,7 +257,16 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
       return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(segment);
+    // Resume mid-part from the last spoken word when asked to.
+    const startOffset =
+      opts.startOffset && opts.startOffset > 0
+        ? alignToWordStart(segment, opts.startOffset)
+        : 0;
+    const text = startOffset > 0 ? segment.slice(startOffset) : segment;
+    charIndexRef.current = startOffset;
+    setCharIndex(startOffset);
+
+    const utterance = new SpeechSynthesisUtterance(text);
     const voice = synth
       .getVoices()
       .find((candidate) => candidate.voiceURI === voiceRef.current);
@@ -223,8 +282,15 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     utterance.onstart = () => {
       if (generation !== generationRef.current) return;
       recoveryRef.current = 0;
-      fallbackRef.current = false;
+      fallbackRef.current = 0;
       setError(null);
+    };
+    utterance.onboundary = (event) => {
+      if (generation !== generationRef.current) return;
+      boundaryFiredRef.current = true;
+      const pos = startOffset + (event.charIndex ?? 0);
+      charIndexRef.current = pos;
+      setCharIndex(pos);
     };
     utterance.onend = () => {
       if (generation !== generationRef.current || stateRef.current !== "playing")
@@ -244,17 +310,21 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
       if (code === "interrupted" || code === "canceled") return;
       if (generation !== generationRef.current) return;
 
-      // The chosen voice or engine render failed. Retry once with a different
-      // voice (or the engine default) before giving up — this rescues broken
-      // voice picks on Windows/Linux and some sandboxed engines.
+      // Stage 1: transient engine hiccups are common — same voice, one retry.
+      if (code === "synthesis-failed" && fallbackRef.current === 0) {
+        fallbackRef.current = 1;
+        speakFrom(from, { fromWatchdog: true, startOffset });
+        return;
+      }
+      // Stage 2: the voice itself may be broken — switch to another.
       const retriable =
         code === "synthesis-failed" ||
         code === "audio-capture" ||
         code === "voice-unavailable" ||
         code === "language-unavailable" ||
         code === "network";
-      if (retriable && !fallbackRef.current) {
-        fallbackRef.current = true;
+      if (retriable && fallbackRef.current < 2) {
+        fallbackRef.current = 2;
         const failedURI = voiceRef.current;
         const list = synth.getVoices();
         const alternative =
@@ -262,7 +332,7 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
             ?.voiceURI ?? "";
         voiceRef.current = alternative;
         setVoiceURI(alternative);
-        speakFrom(from, { fromWatchdog: true });
+        speakFrom(from, { fromWatchdog: true, startOffset });
         return;
       }
 
@@ -278,6 +348,12 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
 
     setEngineState("playing", from);
 
+    const beginSpeaking = () => {
+      speakingSinceRef.current = Date.now();
+      boundaryFiredRef.current = false;
+      synth.speak(utterance);
+    };
+
     if (synth.speaking || synth.pending || synth.paused) {
       // Something is queued: cancel it first, then speak on the next tick so
       // the fresh utterance isn't swallowed by the cancel. This path never
@@ -286,12 +362,12 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
       window.setTimeout(() => {
         if (generation !== generationRef.current || stateRef.current !== "playing")
           return;
-        synth.speak(utterance);
+        beginSpeaking();
       }, 60);
     } else {
       // Engine is idle (first play, or the previous part just ended):
       // speak synchronously for maximum reliability.
-      synth.speak(utterance);
+      beginSpeaking();
     }
   }
 
@@ -301,7 +377,12 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
 
   function pause() {
     if (!supported || stateRef.current !== "playing") return;
-    window.speechSynthesis.pause();
+    // synth.pause() is a silent no-op on several engines (notably Chrome with
+    // its remote voices), which made pause feel dead. Cancel is the one
+    // control every engine honors — and the last word-boundary position
+    // lets us resume exactly mid-part.
+    generationRef.current += 1;
+    window.speechSynthesis.cancel();
     setEngineState("paused");
   }
 
@@ -311,10 +392,14 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
       pause();
       return;
     }
-    // Resume by re-speaking the current part: resume() is unreliable across
-    // browsers (Chrome often stays silent after un-pausing), and restarting
-    // the segment is always correct after a seek, voice, or rate change.
-    speakFrom(indexRef.current);
+    // Resume from the last spoken word (falls back to the part start when
+    // the engine gave us no boundary events near the end).
+    const part = segmentsRef.current[indexRef.current] ?? "";
+    const resumeAt =
+      charIndexRef.current > 0 && charIndexRef.current < part.length - 2
+        ? charIndexRef.current
+        : 0;
+    speakFrom(indexRef.current, { startOffset: resumeAt });
   }
 
   function stop() {
@@ -336,6 +421,8 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     } else {
       // Idle or paused: just move the cursor to the new part.
       setEngineState(stateRef.current, clamped);
+      charIndexRef.current = 0;
+      setCharIndex(0);
     }
   }
 
@@ -352,7 +439,10 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     localStorage.setItem(RATE_KEY, String(clamped));
     setRate(clamped);
     rateRef.current = clamped;
-    if (stateRef.current === "playing") speakFrom(indexRef.current);
+    // Re-speak from the current word so the change applies instantly.
+    if (stateRef.current === "playing") {
+      speakFrom(indexRef.current, { startOffset: charIndexRef.current });
+    }
   }
 
   function updateVoice(next: string) {
@@ -360,13 +450,16 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     localStorage.setItem(VOICE_KEY, next);
     setVoiceURI(next);
     voiceRef.current = next;
-    if (stateRef.current === "playing") speakFrom(indexRef.current);
+    if (stateRef.current === "playing") {
+      speakFrom(indexRef.current, { startOffset: charIndexRef.current });
+    }
   }
 
   return {
     supported,
     state,
     index,
+    charIndex,
     rate,
     voiceURI,
     voices,
