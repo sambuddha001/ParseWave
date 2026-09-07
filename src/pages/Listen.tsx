@@ -50,11 +50,29 @@ export default function Listen() {
   const narrate = useAction(api.tts.generateAudiobook);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const seekToRef = useRef<number | null>(null);
   const lastSaveRef = useRef(0);
-  const restoredRef = useRef(false);
 
-  const [index, setIndex] = useState(0);
+  // Read the saved playback position once, lazily, before first render.
+  const [savedPos] = useState(() => {
+    if (!bookId) return null;
+    try {
+      return JSON.parse(localStorage.getItem(posKey(bookId)) ?? "null") as
+        | { idx?: number; time?: number }
+        | null;
+    } catch {
+      return null;
+    }
+  });
+  const seekToRef = useRef<number | null>(
+    typeof savedPos?.time === "number" && savedPos.time > 1
+      ? savedPos.time
+      : null,
+  );
+  const [requestedIndex, setRequestedIndex] = useState<number | null>(
+    typeof savedPos?.idx === "number" && savedPos.idx >= 0
+      ? savedPos.idx
+      : null,
+  );
   const [wantPlay, setWantPlay] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -67,32 +85,13 @@ export default function Listen() {
   }, [book, navigate]);
 
   const total = segments?.length ?? 0;
+  // The playing index is derived: fall back to the first part when the saved
+  // position is out of range for the loaded segments.
+  const index =
+    requestedIndex !== null && requestedIndex < Math.max(total, 1)
+      ? requestedIndex
+      : 0;
   const current = segments?.[index];
-
-  // Restore last position once, when segments first arrive.
-  useEffect(() => {
-    if (restoredRef.current || !segments?.length || !bookId) return;
-    restoredRef.current = true;
-    try {
-      const saved = JSON.parse(
-        localStorage.getItem(posKey(bookId)) ?? "null",
-      ) as { idx?: number; time?: number } | null;
-      if (
-        saved &&
-        typeof saved.idx === "number" &&
-        saved.idx >= 0 &&
-        saved.idx < segments.length &&
-        segments[saved.idx]?.url
-      ) {
-        setIndex(saved.idx);
-        if (typeof saved.time === "number" && saved.time > 1) {
-          seekToRef.current = saved.time;
-        }
-      }
-    } catch {
-      // ignore corrupted saved positions
-    }
-  }, [segments, bookId]);
 
   // Point the audio element at the current segment when it has audio.
   useEffect(() => {
@@ -152,7 +151,7 @@ export default function Listen() {
     savePosition(index + 1, 0);
     if (index + 1 < total) {
       seekToRef.current = 0;
-      setIndex(index + 1);
+      setRequestedIndex(index + 1);
     } else {
       setWantPlay(false);
     }
@@ -167,10 +166,10 @@ export default function Listen() {
       );
       return;
     }
-    setWantPlay((play) => {
-      if (play) savePosition(index, audioRef.current?.currentTime ?? 0);
-      return !play;
-    });
+    if (wantPlay) {
+      savePosition(index, audioRef.current?.currentTime ?? 0);
+    }
+    setWantPlay(!wantPlay);
   }
 
   function changeIndex(next: number) {
@@ -180,7 +179,7 @@ export default function Listen() {
     seekToRef.current = 0;
     setCurrentTime(0);
     setDuration(0);
-    setIndex(clamped);
+    setRequestedIndex(clamped);
   }
 
   function skip(delta: number) {
