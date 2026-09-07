@@ -1,6 +1,6 @@
 {
-  "name": "Audiobook Weaver",
-  "short_name": "Audiobook Weaver",
+  "name": "ParseWave",
+  "short_name": "ParseWave",
   "description": "Turn any document into an audiobook instantly — narration runs entirely in your browser.",
   "start_url": "/",
   "display": "standalone",

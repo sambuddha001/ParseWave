@@ -32,8 +32,9 @@ const RATE_OPTIONS = [0.75, 1, 1.25, 1.5, 2];
 function fmtMinutes(minutes: number): string {
   if (minutes < 1) return "<1 min";
   if (minutes >= 60) {
-    const h = Math.floor(minutes / 60);
-    const m = minutes % 60;
+    let h = Math.floor(minutes / 60);
+    const m = Math.round(minutes % 60);
+    if (m >= 60) return `${h + 1}h`;
     return m ? `${h}h ${m}m` : `${h}h`;
   }
   return `${Math.round(minutes)} min`;

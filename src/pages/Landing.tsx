@@ -6,16 +6,32 @@ import { deleteBook, listBooks, type StoredBook } from "@/lib/bookStore";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FileText,
+  Github,
   Headphones,
   Images,
   Infinity as InfinityIcon,
+  Linkedin,
   ScanSearch,
   ShieldCheck,
   Sparkles,
   Timer,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+
+const CONTACT_LINKS = [
+  {
+    href: "https://github.com/sambuddha001",
+    label: "ParseWave on GitHub",
+    icon: Github,
+  },
+  {
+    href: "https://www.linkedin.com/in/sambuddha-pal/",
+    label: "Sambuddha Pal on LinkedIn",
+    icon: Linkedin,
+  },
+] as const;
 
 const fadeUp = {
   initial: { opacity: 0, y: 24 },
@@ -105,10 +121,30 @@ export default function Landing() {
       <header className="sticky top-0 z-30 border-b border-border/60 bg-background/85 backdrop-blur">
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
           <BrandMark showWordmark />
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-soft">
-            <ShieldCheck className="size-3.5 text-primary" />
-            Runs 100% in your browser
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-soft">
+              <ShieldCheck className="size-3.5 text-primary" />
+              Runs 100% in your browser
+            </span>
+            {CONTACT_LINKS.map((link) => (
+              <Button
+                key={link.href}
+                variant="outline"
+                size="icon"
+                asChild
+                className="size-9 rounded-full shadow-soft"
+              >
+                <a
+                  href={link.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={link.label}
+                >
+                  <link.icon className="size-4" />
+                </a>
+              </Button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -299,7 +335,7 @@ export default function Landing() {
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-4 px-4 sm:flex-row sm:px-6">
           <BrandMark showWordmark />
           <p className="text-xs text-muted-foreground">
-            &copy; 2026 Audiobook Weaver &middot; Narrated locally, with warmth
+            &copy; 2026 ParseWave &middot; Narrated locally, with warmth
           </p>
         </div>
       </footer>
