@@ -3,6 +3,19 @@
 
 <head>
   <meta charset="UTF-8" />
+  <script>
+    // Apply the saved theme before first paint to avoid a flash of the wrong
+    // theme. Defaults to dark when the user hasn't chosen yet.
+    (function () {
+      try {
+        var saved = localStorage.getItem("pw:theme");
+        var dark =
+          saved === "dark" ||
+          (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+      } catch (e) {}
+    })();
+  </script>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -12,11 +25,11 @@
   />
   <meta name="theme-color" content="#AD4E27" />
   <title>ParseWave</title>
-  <script type="module" crossorigin src="/assets/index-CkZ9wpLS.js"></script>
-  <link rel="modulepreload" crossorigin href="/assets/framer-motion-D5IBGcks.js">
-  <link rel="modulepreload" crossorigin href="/assets/radix-ui-BUimWWyB.js">
-  <link rel="modulepreload" crossorigin href="/assets/react-vendor-DYiT6Z_u.js">
-  <link rel="stylesheet" crossorigin href="/assets/index-BfEwKJY3.css">
+  <script type="module" crossorigin src="/assets/index-Y5YRrGxo.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/framer-motion-CMh_u_qu.js">
+  <link rel="modulepreload" crossorigin href="/assets/react-vendor-Y8cvCSRm.js">
+  <link rel="modulepreload" crossorigin href="/assets/radix-ui-FFN09o85.js">
+  <link rel="stylesheet" crossorigin href="/assets/index-ClMKitWa.css">
 </head>
 
 
