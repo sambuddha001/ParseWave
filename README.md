@@ -1,5 +1,7 @@
 <div align="center">
+  <img width="800" alt="Screenshot From 2026-09-08 14-39-48" src="https://github.com/user-attachments/assets/f91dbcdf-e4a7-46b9-9ab5-d6a463706a20" />
 
+  
   # 🌊 ParseWave
   
   **Your documents, read *aloud* — right now.**
@@ -30,6 +32,7 @@ I needed a way to review heavy PDFs and documentation while multitasking. The co
 ---
 
 <div align="center">
+  <img width="800" alt="Screenshot From 2026-09-08 14-41-40" src="https://github.com/user-attachments/assets/2480bc19-502d-4b4d-b1f4-0f05ca807c97" />
 </div>
 
 ### 🚀 How to Use
@@ -43,6 +46,7 @@ Getting started is completely frictionless.
 ---
 
 <div align="center">
+  <img width="800" alt="Screenshot From 2026-09-08 14-45-16" src="https://github.com/user-attachments/assets/0f2aebf5-d8e8-4c60-b416-c2678b8d8299" />
 </div>
 
 ### 🎧 Player Controls
@@ -66,6 +70,6 @@ Shipping beats perfecting.
 ---
 
 <div align="center">
-  <i>ParseWave · Narrated locally, with warmth.</i><br><br>
-  <a><b>🌊 Try it live right now</b></a>
+  <i>© 2026 ParseWave · Narrated locally, with warmth.</i><br><br>
+  <a href="https://parsewave.freebuff.app/"><b>🌊 Try it live right now</b></a>
 </div>
