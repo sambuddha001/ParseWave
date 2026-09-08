@@ -1,12 +1,5 @@
 import { Button } from "@/components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   CHARS_PER_SECOND,
   pickDefaultVoice,
   useNarrator,
@@ -18,14 +11,38 @@ import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
+  AudioLines,
   BookAudio,
+  Check,
+  ChevronDown,
   Pause,
   Play,
   SkipBack,
   SkipForward,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+/** Rank a voice for the picker: English + premium network voices float up. */
+function voiceRank(voice: SpeechSynthesisVoice): number {
+  const name = voice.name.toLowerCase();
+  const lang = voice.lang.toLowerCase();
+  let score = 0;
+  if (lang.startsWith("en")) score += 100;
+  if (/natural|neural|premium|enhanced|wavenet|studio|journey|online/.test(name))
+    score += 40;
+  if (name.includes("google")) score += 20;
+  if (name.includes("microsoft") && name.includes("online")) score += 20;
+  if (voice.localService) score -= 5;
+  if (/espeak|pico|festival|eloquence|freetts/.test(name)) score -= 30;
+  return score;
+}
+
+function voiceLabel(voice: SpeechSynthesisVoice): string {
+  const name = voice.name.replace(/\s*\(.*?\)\s*$/g, "").trim();
+  const lang = voice.lang.replace("-", " ");
+  return `${name} · ${lang}`;
+}
 
 const RATE_OPTIONS = [0.75, 1, 1.25, 1.5, 2];
 
@@ -110,9 +127,8 @@ export function NarrationDeck({
   const sortedVoices = useMemo(
     () =>
       [...narrator.voices].sort((a, b) => {
-        const aEn = a.lang.toLowerCase().startsWith("en") ? 0 : 1;
-        const bEn = b.lang.toLowerCase().startsWith("en") ? 0 : 1;
-        return aEn - bEn || a.name.localeCompare(b.name);
+        const rank = voiceRank(b) - voiceRank(a);
+        return rank !== 0 ? rank : a.name.localeCompare(b.name);
       }),
     [narrator.voices],
   );
@@ -120,6 +136,49 @@ export function NarrationDeck({
     () => pickDefaultVoice(narrator.voices),
     [narrator.voices],
   );
+  const activeVoice = useMemo(
+    () =>
+      sortedVoices.find((v) => v.voiceURI === narrator.voiceURI) ??
+      defaultVoice ??
+      sortedVoices[0],
+    [sortedVoices, narrator.voiceURI, defaultVoice],
+  );
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const voiceButtonRef = useRef<HTMLButtonElement>(null);
+  const voiceListRef = useRef<HTMLDivElement>(null);
+
+  // Bring the active voice into view the moment the list opens.
+  useEffect(() => {
+    if (!voiceOpen) return;
+    const list = voiceListRef.current;
+    if (!list) return;
+    const selected = list.querySelector('[aria-current="true"]');
+    if (selected instanceof HTMLElement) {
+      selected.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [voiceOpen]);
+
+  // Close the voice picker when the user clicks elsewhere.
+  useEffect(() => {
+    if (!voiceOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        voiceButtonRef.current &&
+        !voiceButtonRef.current.contains(event.target as Node)
+      ) {
+        setVoiceOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setVoiceOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [voiceOpen]);
 
   function handleSeek(event: React.MouseEvent<HTMLDivElement>) {
     if (!totalChars) return;
@@ -323,30 +382,84 @@ export function NarrationDeck({
 
           {/* Voice + speed */}
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0 flex-1 sm:max-w-64">
-              <Select
-                value={narrator.voiceURI || undefined}
-                onValueChange={narrator.setVoice}
+            <div className="relative min-w-0 flex-1 sm:max-w-64">
+              <button
+                ref={voiceButtonRef}
+                type="button"
+                onClick={() => setVoiceOpen((open) => !open)}
                 disabled={sortedVoices.length === 0}
+                className="flex w-full items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 py-2 text-left text-sm shadow-xs transition-colors hover:border-primary/40 focus-visible:ring-ring/50 outline-none focus-visible:ring-[3px]"
+                aria-label="Narrator voice"
+                aria-haspopup="listbox"
+                aria-expanded={voiceOpen}
               >
-                <SelectTrigger
-                  className="w-full bg-background"
-                  aria-label="Narrator voice"
-                >
-                  <SelectValue
-                    placeholder={
-                      defaultVoice ? defaultVoice.name : "Default voice"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {sortedVoices.map((voice) => (
-                    <SelectItem key={voice.voiceURI} value={voice.voiceURI}>
-                      {voice.name} &middot; {voice.lang}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                <span className="flex min-w-0 items-center gap-2">
+                  <AudioLines className="size-4 shrink-0 text-primary" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {activeVoice ? voiceLabel(activeVoice) : "Default voice"}
+                  </span>
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "size-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                    voiceOpen && "rotate-180",
+                  )}
+                />
+              </button>
+
+              <AnimatePresence initial={false}>
+                {voiceOpen && sortedVoices.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    transition={{ duration: 0.15, ease: "easeOut" }}
+                    className="absolute left-0 right-0 top-full z-50 mt-1.5 w-full min-w-56 rounded-xl border border-border bg-popover shadow-lift"
+                    role="listbox"
+                  >
+                    <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Narrator voice
+                      </p>
+                      <span className="text-[11px] text-muted-foreground">
+                        {sortedVoices.length} available
+                      </span>
+                    </div>
+                    <div
+                      ref={voiceListRef}
+                      className="max-h-56 overflow-y-auto overscroll-contain p-1 [scrollbar-width:thin] [scrollbar-color:var(--border)_transparent]"
+                    >
+                      {sortedVoices.map((voice) => {
+                        const selected = voice.voiceURI === narrator.voiceURI;
+                        return (
+                          <button
+                            key={voice.voiceURI}
+                            type="button"
+                            onClick={() => {
+                              narrator.setVoice(voice.voiceURI);
+                              setVoiceOpen(false);
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                              selected
+                                ? "bg-accent/70 text-foreground"
+                                : "text-popover-foreground hover:bg-accent/40",
+                            )}
+                            aria-current={selected ? "true" : undefined}
+                          >
+                            <span className="min-w-0 flex-1 truncate">
+                              {voiceLabel(voice)}
+                            </span>
+                            {selected && (
+                              <Check className="size-4 shrink-0 text-primary" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
             <div
               className="flex flex-wrap items-center gap-1.5"
