@@ -102,7 +102,8 @@ export interface NarratorApi {
  * - The first `speak()` happens synchronously inside the user gesture
  *   (Safari and iOS refuse speech deferred past the gesture).
  * - A watchdog recovers when the engine stalls silently, resuming from the
- *   last spoken word instead of restarting the part.
+ *   last spoken word instead of restarting the part. It only intervenes
+ *   after sustained silence, so part-to-part chaining never gets re-spoken.
  * - A synthesis failure retries the same voice once (transient hiccups are
  *   common), then switches to a different voice before showing an error.
  */
@@ -132,7 +133,10 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
   const recoveryRef = useRef(0);
   const fallbackRef = useRef(0);
   const boundaryFiredRef = useRef(false);
-  const speakingSinceRef = useRef(0);
+  const lastProgressAtRef = useRef(0);
+  const lastBoundaryAtRef = useRef(0);
+  const lastResumeAtRef = useRef(0);
+  const resumedRef = useRef(false);
 
   useEffect(() => {
     segmentsRef.current = segments;
@@ -181,22 +185,39 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     };
   }, [supported]);
 
-  // Heartbeat + silence watchdog. Chrome sometimes accepts an utterance but
-  // never plays it, or freezes mid-part; both previously looked identical to
-  // a dead player. Recover from the last spoken word instead of restarting.
+  // Watchdog — two jobs, both triggered only on genuine stalls so normal
+  // narration is never interrupted:
+  //  1. Chrome freezes on long utterances: the engine keeps reporting
+  //     "speaking" but stops producing boundary events. A single resume()
+  //     after a stall (not a per-tick heartbeat — that churn stutters audio)
+  //     kick-starts it.
+  //  2. True silence while "playing": after sustained misses, re-speak from
+  //     the last known position.
   useEffect(() => {
     if (!supported) return;
-    const synth = window.speechSynthesis;
     const watchdog = window.setInterval(() => {
-      if (stateRef.current !== "playing" || synth.paused) return;
+      if (stateRef.current !== "playing") return;
+      const synth = window.speechSynthesis;
       if (synth.speaking || synth.pending) {
-        // A no-op resume() unfreezes Chrome's long-utterance stall.
-        if (synth.speaking && !synth.paused) synth.resume();
-        // Engines without boundary events: estimate the reading position
-        // so captions and the progress bar still move.
-        if (!boundaryFiredRef.current && speakingSinceRef.current > 0) {
+        // Chrome long-utterance freeze: speaking but no boundary for ~4s.
+        const stalled =
+          synth.speaking &&
+          lastBoundaryAtRef.current > 0 &&
+          Date.now() - lastBoundaryAtRef.current > 4000 &&
+          Date.now() - lastResumeAtRef.current > 4000;
+        if (stalled) {
+          lastResumeAtRef.current = Date.now();
+          synth.resume();
+        }
+        // Engines without boundary events: estimate the reading position so
+        // captions and the progress bar still move.
+        if (
+          !boundaryFiredRef.current &&
+          lastProgressAtRef.current > 0 &&
+          !resumedRef.current
+        ) {
           const part = segmentsRef.current[indexRef.current] ?? "";
-          const seconds = (Date.now() - speakingSinceRef.current) / 1000;
+          const seconds = (Date.now() - lastProgressAtRef.current) / 1000;
           const estimated = Math.floor(
             seconds * CHARS_PER_SECOND * rateRef.current,
           );
@@ -211,18 +232,17 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
         }
         return;
       }
+      // Engine is silent while we expect audio: count consecutive misses.
+      // (A brief part-to-part gap is fine — we only act after ~3.6s.)
       recoveryRef.current += 1;
-      if (recoveryRef.current > 5) {
-        setEngineState("idle");
-        setError(
-          "Your browser's speech engine isn't responding. Try reloading the page or another browser (Chrome, Edge, or Safari).",
-        );
-        return;
+      if (recoveryRef.current >= 3) {
+        recoveryRef.current = 0;
+        resumedRef.current = true; // watchdog re-speaks must not estimate
+        speakFrom(indexRef.current, {
+          fromWatchdog: true,
+          startOffset: charIndexRef.current,
+        });
       }
-      speakFrom(indexRef.current, {
-        fromWatchdog: true,
-        startOffset: charIndexRef.current,
-      });
     }, 1200);
     return () => window.clearInterval(watchdog);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -288,6 +308,8 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     utterance.onboundary = (event) => {
       if (generation !== generationRef.current) return;
       boundaryFiredRef.current = true;
+      lastProgressAtRef.current = Date.now();
+      lastBoundaryAtRef.current = Date.now();
       const pos = startOffset + (event.charIndex ?? 0);
       charIndexRef.current = pos;
       setCharIndex(pos);
@@ -349,8 +371,7 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
     setEngineState("playing", from);
 
     const beginSpeaking = () => {
-      speakingSinceRef.current = Date.now();
-      boundaryFiredRef.current = false;
+      speakingSinceReset();
       synth.speak(utterance);
     };
 
@@ -369,6 +390,14 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
       // speak synchronously for maximum reliability.
       beginSpeaking();
     }
+  }
+
+  /** Record the moment audio (re)started for watchdog/estimation purposes. */
+  function speakingSinceReset() {
+    boundaryFiredRef.current = false;
+    resumedRef.current = false;
+    lastProgressAtRef.current = Date.now();
+    lastBoundaryAtRef.current = Date.now();
   }
 
   function play(from?: number) {

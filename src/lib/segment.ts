@@ -1,12 +1,12 @@
 /**
  * Split cleaned text into sentence-aligned parts for the browser's speech
- * engine. Parts are large (~2 minutes of reading) so narration flows
+ * engine. Parts are large (~3 minutes of reading) so narration flows
  * continuously like a real audiobook instead of restarting prosody every
  * few sentences, while staying well under every engine's utterance limits.
  * There is no limit on total text length.
  */
 
-const MAX_SEGMENT = 2200;
+const MAX_SEGMENT = 3200;
 
 /** Split a long paragraph into sentence-sized pieces under `max` chars. */
 function splitLongParagraph(paragraph: string, max: number): string[] {
@@ -85,7 +85,9 @@ export function segmentForSpeech(text: string, max = MAX_SEGMENT): string[] {
         if (current) segments.push(current.trim());
         current = piece;
       } else {
-        current += (current ? "\n\n" : "") + piece;
+        // Join with a plain space: a newline mid-part makes several engines
+        // insert a hard, audible pause, which reads as choppy narration.
+        current += (current ? " " : "") + piece;
       }
     }
   }
