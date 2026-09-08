@@ -8,6 +8,13 @@ import type { StoredBook } from "@/lib/bookStore";
 import { waveHeight } from "@/lib/extract";
 import { segmentForSpeech, splitSentences } from "@/lib/segment";
 import { cn } from "@/lib/utils";
+import {
+  downloadBlob,
+  isExportSupported,
+  safeFileName,
+  startMp3Export,
+  type Mp3ExportHandle,
+} from "@/lib/exportAudio";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -15,13 +22,17 @@ import {
   BookAudio,
   Check,
   ChevronDown,
+  Download,
+  Loader2,
   Pause,
   Play,
   SkipBack,
   SkipForward,
+  Square,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 /** Rank a voice for the picker: English + premium network voices float up. */
 function voiceRank(voice: SpeechSynthesisVoice): number {
@@ -45,6 +56,13 @@ function voiceLabel(voice: SpeechSynthesisVoice): string {
 }
 
 const RATE_OPTIONS = [0.75, 1, 1.25, 1.5, 2];
+
+function fmtSeconds(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 function fmtMinutes(minutes: number): string {
   if (minutes < 1) return "<1 min";
@@ -79,7 +97,13 @@ export function NarrationDeck({
       ? Math.min(Math.floor(parsed), segmentForSpeech(book.text).length - 1)
       : 0;
   });
-  const narrator = useNarrator(segments, Math.max(0, initialIndex));
+  const narrator = useNarrator(segments, Math.max(0, initialIndex), {
+    onFinish: () => {
+      // If an export is running, wrap it up when the book ends.
+      const handle = exportHandleRef.current;
+      if (handle) void finishExport(handle);
+    },
+  });
 
   const bars = useMemo(() => Array.from({ length: 48 }, (_, i) => i), []);
   const playing = narrator.state === "playing";
@@ -146,6 +170,83 @@ export function NarrationDeck({
   const [voiceOpen, setVoiceOpen] = useState(false);
   const voiceButtonRef = useRef<HTMLButtonElement>(null);
   const voiceListRef = useRef<HTMLDivElement>(null);
+
+  // --- MP3 export state ---
+  const exportSupported = useMemo(() => isExportSupported(), []);
+  const [exportPhase, setExportPhase] = useState<
+    "idle" | "recording" | "encoding" | "saving"
+  >("idle");
+  const [recordedSeconds, setRecordedSeconds] = useState(0);
+  const exportHandleRef = useRef<Mp3ExportHandle | null>(null);
+  const exportSecondsRef = useRef(0);
+
+  const finishExport = useCallback(
+    async (handle: Mp3ExportHandle) => {
+      exportHandleRef.current = null;
+      setExportPhase("encoding");
+      const blob = await handle.done;
+      if (!blob) {
+        setExportPhase("idle");
+        toast.error("Export cancelled — no audio was captured.");
+        return;
+      }
+      setExportPhase("saving");
+      try {
+        downloadBlob(blob, safeFileName(book.title));
+        toast.success("MP3 saved to your downloads.");
+      } catch {
+        toast.error("Could not save the MP3 file.");
+      }
+      setExportPhase("idle");
+      setRecordedSeconds(0);
+      exportSecondsRef.current = 0;
+    },
+    [book.title],
+  );
+
+  const startExport = useCallback(async () => {
+    if (exportPhase !== "idle" || !exportSupported) return;
+    // Start capture first so the very first spoken word is included.
+    const handle = await startMp3Export();
+    if (!handle) {
+      toast.error(
+        "Couldn't capture this tab's audio. Pick “This tab” with “Share tab audio” checked when your browser asks.",
+      );
+      return;
+    }
+    exportHandleRef.current = handle;
+    exportSecondsRef.current = 0;
+    setRecordedSeconds(0);
+    setExportPhase("recording");
+    // Kick off narration (or resume) right after capture is live.
+    if (narrator.state !== "playing") narrator.play();
+    void handle.done.then(() => {
+      // If capture ends on its own (e.g. user hit “Stop sharing”), finish up.
+      if (exportHandleRef.current === handle) {
+        void finishExport(handle);
+      }
+    });
+  }, [exportPhase, exportSupported, narrator, finishExport]);
+
+  const stopExport = useCallback(() => {
+    const handle = exportHandleRef.current;
+    if (!handle) return;
+    // Pause narration too — the export captures exactly what played.
+    if (narrator.state === "playing") narrator.pause();
+    void finishExport(handle);
+  }, [narrator, finishExport]);
+
+  // Tick the recorded-seconds counter while recording.
+  useEffect(() => {
+    if (exportPhase !== "recording") return;
+    const timer = window.setInterval(() => {
+      if (narrator.state === "playing") {
+        exportSecondsRef.current += 1;
+        setRecordedSeconds(exportSecondsRef.current);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [exportPhase, narrator.state]);
 
   // Bring the active voice into view the moment the list opens.
   useEffect(() => {
@@ -482,6 +583,65 @@ export function NarrationDeck({
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Download MP3 */}
+          <div className="mt-5 border-t border-border/60 pt-5">
+            {exportPhase === "idle" ? (
+              <div className="flex flex-col gap-1.5">
+                <Button
+                  onClick={() => void startExport()}
+                  disabled={!exportSupported}
+                  className="w-full gap-2"
+                >
+                  <Download className="size-4" />
+                  Download MP3
+                </Button>
+                <p className="text-center text-[11px] leading-4 text-muted-foreground">
+                  {exportSupported
+                    ? "Records the narration as it plays, right in your browser — no uploads, no APIs."
+                    : "MP3 export needs a browser with screen-capture support (Chrome, Edge, or Safari)."}
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2 rounded-xl border border-border/60 bg-background/60 p-4">
+                {exportPhase === "recording" ? (
+                  <>
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <span className="relative flex size-2.5">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-60" />
+                        <span className="relative inline-flex size-2.5 rounded-full bg-destructive" />
+                      </span>
+                      Recording &middot; {fmtSeconds(recordedSeconds)}
+                    </div>
+                    <p className="text-center text-[11px] leading-4 text-muted-foreground">
+                      Narration is playing and being captured. Let it finish, or
+                      stop whenever you like.
+                    </p>
+                    <Button
+                      variant="outline"
+                      className="gap-2"
+                      onClick={() => void stopExport()}
+                    >
+                      <Square className="size-3.5" />
+                      Stop &amp; save
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Loader2 className="size-4 animate-spin text-primary" />
+                      {exportPhase === "encoding"
+                        ? "Encoding your MP3…"
+                        : "Saving your MP3…"}
+                    </div>
+                    <p className="text-center text-[11px] leading-4 text-muted-foreground">
+                      Longer books take a few moments to encode.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}

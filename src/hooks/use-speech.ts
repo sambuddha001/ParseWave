@@ -89,6 +89,11 @@ export interface NarratorApi {
   setVoice: (voiceURI: string) => void;
 }
 
+export interface NarratorOptions {
+  /** Called once when the final part finishes playing naturally. */
+  onFinish?: () => void;
+}
+
 /**
  * Drives the browser's built-in speech engine (Web Speech API) across a
  * list of narration parts — no server, no API keys, no usage limits.
@@ -107,7 +112,11 @@ export interface NarratorApi {
  * - A synthesis failure retries the same voice once (transient hiccups are
  *   common), then switches to a different voice before showing an error.
  */
-export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
+export function useNarrator(
+  segments: string[],
+  initialIndex = 0,
+  options: NarratorOptions = {},
+): NarratorApi {
   const supported =
     typeof window !== "undefined" && "speechSynthesis" in window;
 
@@ -137,6 +146,11 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
   const lastBoundaryAtRef = useRef(0);
   const lastResumeAtRef = useRef(0);
   const resumedRef = useRef(false);
+  const onFinishRef = useRef(options.onFinish);
+
+  useEffect(() => {
+    onFinishRef.current = options.onFinish;
+  });
 
   useEffect(() => {
     segmentsRef.current = segments;
@@ -322,6 +336,7 @@ export function useNarrator(segments: string[], initialIndex = 0): NarratorApi {
         speakFrom(nextIndex);
       } else {
         setEngineState("idle", from);
+        onFinishRef.current?.();
       }
     };
     utterance.onerror = (event) => {

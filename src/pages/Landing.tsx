@@ -11,9 +11,11 @@ import {
   Images,
   Infinity as InfinityIcon,
   Linkedin,
+  Moon,
   ScanSearch,
   ShieldCheck,
   Sparkles,
+  Sun,
   Timer,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -68,6 +70,23 @@ export default function Landing() {
   const [books, setBooks] = useState<StoredBook[] | null>(null);
   const [activeBook, setActiveBook] = useState<StoredBook | null>(null);
   const deckRef = useRef<HTMLDivElement | null>(null);
+
+  // Theme state, hydrated from the pre-paint script in index.html.
+  const [isDark, setIsDark] = useState(() =>
+    typeof document !== "undefined"
+      ? document.documentElement.classList.contains("dark")
+      : false,
+  );
+  const toggleTheme = useCallback(() => {
+    const next = !isDark;
+    setIsDark(next);
+    document.documentElement.classList.toggle("dark", next);
+    try {
+      localStorage.setItem("pw:theme", next ? "dark" : "light");
+    } catch {
+      // storage unavailable — theme just won't persist
+    }
+  }, [isDark]);
 
   useEffect(() => {
     let alive = true;
@@ -144,6 +163,19 @@ export default function Landing() {
                 </a>
               </Button>
             ))}
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={toggleTheme}
+              className="size-9 rounded-full shadow-soft"
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {isDark ? (
+                <Sun className="size-4" />
+              ) : (
+                <Moon className="size-4" />
+              )}
+            </Button>
           </div>
         </div>
       </header>
