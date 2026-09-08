@@ -43,7 +43,6 @@ Getting started is completely frictionless.
 ---
 
 <div align="center">
-  <img src="image_f5d8a6.png" alt="ParseWave Player Interface" width="800"/>
 </div>
 
 ### 🎧 Player Controls
