@@ -69,6 +69,12 @@ Shipping beats perfecting.
 
 ---
 
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
 <div align="center">
   <i>© 2026 ParseWave · Narrated locally, with warmth.</i><br><br>
   <a href="https://parsewave.freebuff.app/"><b>🌊 Try it live right now</b></a>
