@@ -1,6 +1,5 @@
 <div align="center">
-  <img src="image_f5cd65.png" alt="ParseWave Hero Dashboard" width="800"/>
-  
+
   # 🌊 ParseWave
   
   **Your documents, read *aloud* — right now.**
@@ -31,7 +30,6 @@ I needed a way to review heavy PDFs and documentation while multitasking. The co
 ---
 
 <div align="center">
-  <img src="image_f5d0eb.png" alt="ParseWave Three Steps" width="800"/>
 </div>
 
 ### 🚀 How to Use
@@ -69,6 +67,6 @@ Shipping beats perfecting.
 ---
 
 <div align="center">
-  <i>© 2026 ParseWave · Narrated locally, with warmth.</i><br><br>
-  <a href="https://parsewave.freebuff.app/"><b>🌊 Try it live right now</b></a>
+  <i>ParseWave · Narrated locally, with warmth.</i><br><br>
+  <a><b>🌊 Try it live right now</b></a>
 </div>
